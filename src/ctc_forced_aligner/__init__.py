@@ -572,13 +572,73 @@ def _generate_srt(model, tokenizer, input_audio_path, input_text_path, output_sr
             end = entry["end"]
             text = entry["text"]
             f.write(f"{i}\n")
-            f.write(
-                f"{int(start // 3600):02}:{int(start % 3600 // 60):02}:{start % 60:06.3f} --> "
-                f"{int(end // 3600):02}:{int(end % 3600 // 60):02}:{end % 60:06.3f}\n"
-            )
+            line = f"{int(start // 3600):02}:{int(start % 3600 // 60):02}:{start % 60:06.3f}".replace(".", ",") + " --> "\
+                   + f"{int(end // 3600):02}:{int(end % 3600 // 60):02}:{end % 60:06.3f}".replace(".", ",") + "\n"
+            f.write(line)
             f.write(f"{text}\n\n")
     logger.debug(f"SRT file saved to {output_srt_path}")
     return os.path.exists(output_srt_path)
+
+
+def _generate_webvtt(model, tokenizer, input_audio_path, input_text_path, output_vtt_path, language="eng", batch_size=4):
+    # Load the audio waveform
+    audio_waveform = load_audio(input_audio_path)
+    # Read text from file or use input text directly
+    if os.path.isfile(input_text_path):
+        with open(input_text_path, "r", encoding="utf-8") as f:
+            text = f.read().strip().replace("\n", " ")
+    else:
+        text = input_text_path.strip().replace("\n", " ")
+    # Generate emissions using ONNX model
+    emissions, stride = generate_emissions(model, audio_waveform, batch_size=batch_size)
+    # Preprocess text for alignment
+    tokens_starred, text_starred = preprocess_text(text, romanize=True, language=language)
+    # Get alignments
+    segments, scores, blank_token = get_alignments(emissions, tokens_starred, tokenizer)
+    # Map segments to spans
+    spans = get_spans(tokens_starred, segments, blank_token)
+    # Get word-level timestamps
+    word_timestamps = postprocess_results(text_starred, spans, stride, scores)
+    # Read lyrics from file if applicable
+    lyrics_lines = []
+    if os.path.isfile(input_text_path):
+        with open(input_text_path, "r", encoding="utf-8") as f:
+            lyrics_lines = [line.strip() for line in f if line.strip()]
+    else:
+        lyrics_lines = input_text_path.split("\n")
+    # Generate line-level timestamps
+    line_timestamps = []
+    current_line = ""
+    current_start = None
+    line_index = 0
+    for word in word_timestamps:
+        if current_start is None:
+            current_start = word["start"]
+        current_end = word["end"]
+        current_line += word["text"] + " "
+        # If the current line matches a lyrics line, store timestamp
+        if line_index < len(lyrics_lines) and lyrics_lines[line_index] == current_line.strip():
+            line_timestamps.append({
+                "start": current_start,
+                "end": current_end,
+                "text": lyrics_lines[line_index],
+            })
+            current_line = ""
+            current_start = None
+            line_index += 1
+    # Save WebVTT file
+    with open(output_vtt_path, "w", encoding="utf-8") as f:
+        f.write("WEBVTT\n\n")
+        for entry in line_timestamps:
+            start = entry["start"]
+            end = entry["end"]
+            text = entry["text"]
+            start_time = f"{int(start // 3600):02}:{int(start % 3600 // 60):02}:{start % 60:06.3f}"
+            end_time = f"{int(end // 3600):02}:{int(end % 3600 // 60):02}:{end % 60:06.3f}"
+            f.write(f"{start_time} --> {end_time}\n{text}\n\n")
+    logger.debug(f"WebVTT file saved to {output_vtt_path}")
+    return os.path.isfile(output_vtt_path)
+
 
 
 class AlignmentSingleton:
@@ -616,6 +676,10 @@ class AlignmentSingleton:
         return _generate_srt(self.model, self.tokenizer, input_audio_path, input_text_path, output_srt_path, language,
                              batch_size)
 
+    def generate_webvtt(self, input_audio_path, input_text_path, output_vtt_path, language="eng", batch_size=4):
+        return _generate_webvtt(self.model, self.tokenizer, input_audio_path, input_text_path, output_vtt_path, language,
+                             batch_size)
+
     def release_resources(self):
         """Release resources by deleting the ONNX session."""
         if self._instance:
@@ -640,4 +704,8 @@ class Alignment:
 
     def generate_srt(self, input_audio_path, input_text_path, output_srt_path, language="eng", batch_size=4):
         return _generate_srt(self.model, self.tokenizer, input_audio_path, input_text_path, output_srt_path, language,
+                             batch_size)
+
+    def generate_webvtt(self, input_audio_path, input_text_path, output_vtt_path, language="eng", batch_size=4):
+        return _generate_webvtt(self.model, self.tokenizer, input_audio_path, input_text_path, output_vtt_path, language,
                              batch_size)

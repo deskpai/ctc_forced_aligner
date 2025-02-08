@@ -45,9 +45,20 @@ if ret:
     print(f"Aligned SRT is generated at {output_srt_path}")
 ```
 
+## License
+
+This project includes code from [MahmoudAshraf97/ctc-forced-aligner](https://github.com/MahmoudAshraf97/ctc-forced-aligner), licensed under the BSD license:
+
+```
+This project is licensed under the BSD License, note that the default model has CC-BY-NC 4.0 License, so make sure to use a different model for commercial usage.
+```
+
+Modifications and additional code are licensed under the [DOSL-1.0 license](https://github.com/deskpai/deskpai/blob/main/LICENSE).
+
+
 
 ## 🙏 Special Thanks  
 
-- The model weights are adapted from [MahmoudAshraf/mms-300m-1130-forced-aligner](https://huggingface.co/MahmoudAshraf/mms-300m-1130-forced-aligner), trained by [Mahmoud Ashraf](https://huggingface.co/MahmoudAshraf). We removed heavy dependencies (`uroman`, `torch` etc) and added new features (SRT output, etc.) to make it production-ready.  
+- The model weights are adapted from [MahmoudAshraf/mms-300m-1130-forced-aligner](https://huggingface.co/MahmoudAshraf/mms-300m-1130-forced-aligner), trained by [Mahmoud Ashraf](https://huggingface.co/MahmoudAshraf). We removed heavy dependencies (`uroman`, `torch` etc) and added new features (SRT/WEBVTT output, etc.) to make it production-ready.  
 
 - Ruizhe Huang's paper, [LESS PEAKY AND MORE ACCURATE CTC FORCED ALIGNMENT BY LABEL PRIORS](https://arxiv.org/pdf/2406.02560), provided valuable insights into the model.  
