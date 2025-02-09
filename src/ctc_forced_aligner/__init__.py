@@ -138,13 +138,87 @@ def get_spans(tokens, segments, blank):
     return spans
 
 
-def load_audio(audio_file: str):
-    # Load audio using librosa (it will automatically convert to mono)
+def load_audio(audio_file, ret_type='np'):
     waveform, audio_sf = librosa.load(audio_file, sr=SAMPLING_FREQ, mono=True)
-    r = waveform.astype(numpy.float32)  # Ensure compatibility with ONNX input
-    logger.debug(f"r.shape: {r.shape}")  # waveform.shape: torch.Size([3885950])
-    return r
+    if ret_type == 'np':
+        return waveform.astype(numpy.float32)
+    else:
+        import torch
+        return torch.tensor(waveform, dtype=torch.float32).unsqueeze(0)
 
+
+def load_transcript(file_path, dictionary):
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    lyrics_lines = []
+    transcript = []
+    for line in lines:
+        words = line.strip().lower().split()
+        cleaned_words = ["".join([char for char in word if char in dictionary and dictionary[char] != 0]) for word in words]
+        cleaned_words = [word for word in cleaned_words if word]
+        if cleaned_words:
+            transcript.extend(cleaned_words)
+            lyrics_lines.append(" ".join(cleaned_words))
+    return transcript, lyrics_lines
+
+def align(emission, tokens, device):
+    import torch
+    import torchaudio.functional as F
+    targets = torch.tensor([tokens], dtype=torch.int32, device=device)
+    return F.forced_align(emission, targets, blank=0)
+
+def unflatten(list_, lengths):
+    i, ret = 0, []
+    for l in lengths:
+        ret.append(list_[i : i + l])
+        i += l
+    return ret
+
+def _postprocess_results(text, spans, waveform, num_frames, sample_rate, scores):
+    """Post-processes alignment results to return accurate word timestamps."""
+    results = []
+    ratio = waveform.size(1) / num_frames
+    for i, t in enumerate(text):
+        span = spans[i]
+        x0, x1 = int(ratio * span[0].start), int(ratio * span[-1].end)
+        audio_start_sec = x0 / sample_rate
+        audio_end_sec = x1 / sample_rate
+        score = scores[span[0].start:span[-1].end].sum()
+        results.append({"start": audio_start_sec, "end": audio_end_sec, "text": t, "score": score.item()})
+    return results
+
+def get_word_stamps(audio_path, transcript_path, model=None, model_type='MMS_FA'):
+    import torch
+    import torchaudio
+    import torchaudio.functional as F
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    waveform = load_audio(audio_path, ret_type='torch').to(device)
+    if model_type == 'MMS_FA':
+        bundle = torchaudio.pipelines.MMS_FA
+        dictionary = bundle.get_dict(star=None)
+        transcript, lyrics_lines = load_transcript(transcript_path, dictionary)
+        model = model or bundle.get_model(with_star=False).to(device)
+    elif model_type in ('WAV2VEC2_ASR_BASE_960H', 'WAV2VEC2_ASR_BASE_100H', 'WAV2VEC2_ASR_BASE_10M',
+                        'WAV2VEC2_ASR_LARGE_10M', 'WAV2VEC2_ASR_LARGE_100H', 'WAV2VEC2_ASR_LARGE_960H',
+                        'WAV2VEC2_ASR_LARGE_LV60K_10M', 'WAV2VEC2_ASR_LARGE_LV60K_100H', 'WAV2VEC2_ASR_LARGE_LV60K_960H',
+                        'VOXPOPULI_ASR_BASE_10K_DE', 'VOXPOPULI_ASR_BASE_10K_EN', 'VOXPOPULI_ASR_BASE_10K_ES',
+                        'VOXPOPULI_ASR_BASE_10K_FR', 'VOXPOPULI_ASR_BASE_10K_IT', 'HUBERT_ASR_LARGE',
+                        'HUBERT_ASR_XLARGE'):
+        bundle = getattr(torchaudio.pipelines, model_type)
+        labels = bundle.get_labels()
+        dictionary = {char.lower(): index for index, char in enumerate(labels)}
+        transcript, lyrics_lines = load_transcript(transcript_path, dictionary)
+        model = model or bundle.get_model().to(device)
+    else:
+        raise Exception(f"wrong model type: {model_type}")
+    with torch.inference_mode():
+        emission, _ = model(waveform)
+    tokenized_transcript = [dictionary[c] for word in transcript for c in word if c in dictionary and dictionary[c] != 0]
+    aligned_tokens, alignment_scores = align(emission, tokenized_transcript, device)
+    token_spans = F.merge_tokens(aligned_tokens[0], alignment_scores[0])
+    word_spans = unflatten(token_spans, [len(word) for word in transcript])
+    word_timestamps = _postprocess_results(transcript, word_spans, waveform, emission.size(1), bundle.sample_rate, alignment_scores)
+    return word_timestamps, model, lyrics_lines
 
 def generate_emissions(session, audio_waveform, window_length=30, context_length=2, batch_size=4):
     # Ensure input is 1D
@@ -261,21 +335,7 @@ def get_alignments(
 def text_normalize(
         text, iso_code, lower_case=True, remove_numbers=True, remove_brackets=False
 ):
-    """Given a text, normalize it by changing to lower case, removing punctuations,
-    removing words that only contain digits and removing extra spaces
-
-    Args:
-        text : The string to be normalized
-        iso_code : ISO 639-3 code of the language
-        remove_numbers : Boolean flag to specify if words containing only digits should be removed
-
-    Returns:
-        normalized_text : the string after all normalization
-
-    """
-
     config = norm_config.get(iso_code, norm_config["*"])
-
     for field in [
         "lower_case",
         "punc_set",
@@ -286,50 +346,28 @@ def text_normalize(
     ]:
         if field not in config:
             config[field] = norm_config["*"][field]
-
     text = unicodedata.normalize(config["unicode_norm"], text)
-
     # Convert to lower case
-
     if config["lower_case"] and lower_case:
         text = text.lower()
-
     # brackets
-
     # always text inside brackets with numbers in them. Usually corresponds to "(Sam 23:17)"
     text = re.sub(r"\([^\)]*\d[^\)]*\)", " ", text)
     if remove_brackets:
         text = re.sub(r"\([^\)]*\)", " ", text)
-
     # Apply mappings
-
     for old, new in config["mapping"].items():
         text = re.sub(old, new, text)
-
     # Replace punctutations with space
-
     punct_pattern = r"[" + config["punc_set"]
-
     punct_pattern += r"]"
-
     normalized_text = re.sub(punct_pattern, " ", text)
-
     # remove characters in delete list
-
     delete_patten = r"[" + config["del_set"] + r"]"
-
     normalized_text = re.sub(delete_patten, "", normalized_text)
-
-    # Remove words containing only digits
-    # We check for 3 cases  a)text starts with a number b) a number is present somewhere in the middle of the text c) the text ends with a number
-    # For each case we use lookaround regex pattern to see if the digit pattern in preceded and followed by whitespaces, only then we replace the numbers with space
-    # The lookaround enables overlapping pattern matches to be replaced
-
     if remove_numbers:
         digits_pattern = r"[" + config["digit_set"]
-
         digits_pattern += r"]+"
-
         complete_digit_pattern = (
                 r"^"
                 + digits_pattern
@@ -339,17 +377,12 @@ def text_normalize(
                 + digits_pattern
                 + r"$"
         )
-
         normalized_text = re.sub(complete_digit_pattern, " ", normalized_text)
-
     if config["rm_diacritics"]:
         from unidecode import unidecode
-
         normalized_text = unidecode(normalized_text)
-
     # Remove extra spaces
     normalized_text = re.sub(r"\s+", " ", normalized_text).strip()
-
     return normalized_text
 
 
@@ -470,7 +503,6 @@ def merge_segments(segments, threshold=0.00):
 def postprocess_results(text_starred: list, spans: list, stride: float, scores: numpy.ndarray,
                         merge_threshold: float = 0.0):
     results = []
-
     for i, t in enumerate(text_starred):
         if t == "<star>":
             continue
@@ -488,7 +520,6 @@ def postprocess_results(text_starred: list, spans: list, stride: float, scores: 
             "score": score.item(),
         }
         results.append(sample)
-
     merge_segments(results, merge_threshold)
     return results
 
@@ -508,39 +539,34 @@ def ensure_onnx_model(model_path: str, url: str):
             raise Exception(f"Failed to download the model. HTTP Status Code: {response.status_code}")
 
 
-def _generate_srt(model, tokenizer, input_audio_path, input_text_path, output_srt_path, language="eng", batch_size=4):
-    # Load the audio waveform
-    audio_waveform = load_audio(input_audio_path)
-    # Determine whether input_text_path is a file path or raw text
-    if os.path.exists(input_text_path):
-        with open(input_text_path, "r") as f:
-            text = f.read().replace("\n", " ").strip()
-    else:
-        text = input_text_path.replace("\n", " ").strip()  # Assume raw text content
-    # Generate emissions using ONNX
-    emissions, stride = generate_emissions(model, audio_waveform, batch_size=batch_size)
-    # Preprocess text for alignment
-    tokens_starred, text_starred = preprocess_text(
-        text,
-        romanize=True,
-        language=language,
-    )
-    # Get alignments (Using new tokenizer)
-    segments, scores, blank_token = get_alignments(
-        emissions,
-        tokens_starred,
-        tokenizer,
-    )
-    # Map segments to spans
-    spans = get_spans(tokens_starred, segments, blank_token)
-    # Postprocess results to get word-level timestamps
-    word_timestamps = postprocess_results(text_starred, spans, stride, scores)
-    # Read line-level text from the lyrics if input_text_path is a file
-    if os.path.exists(input_text_path):
-        with open(input_text_path, "r") as f:
-            lyrics_lines = [line.strip() for line in f if line.strip()]
-    else:
-        lyrics_lines = input_text_path.split("\n")
+def _generate_subtitle(self, input_audio_path, input_text_path, output_st_path, language="eng",
+                       batch_size=4, subtitle_type='srt'):
+    if self.input_audio_path != input_audio_path or self.input_text_path != input_text_path:
+        self.input_audio_path = input_audio_path
+        self.input_text_path = input_text_path
+        audio_waveform = load_audio(input_audio_path)
+        if os.path.exists(input_text_path):
+            with open(input_text_path, "r") as f:
+                text = f.read().replace("\n", " ").strip()
+        else:
+            text = input_text_path.replace("\n", " ").strip()
+        emissions, stride = generate_emissions(self.model, audio_waveform, batch_size=batch_size)
+        tokens_starred, text_starred = preprocess_text(text, romanize=True, language=language)
+        segments, scores, blank_token = get_alignments(emissions, tokens_starred, self.tokenizer)
+        spans = get_spans(tokens_starred, segments, blank_token)
+        self.word_timestamps = postprocess_results(text_starred, spans, stride, scores)
+        if os.path.exists(input_text_path):
+            with open(input_text_path, "r") as f:
+                self.lyrics_lines = [line.strip() for line in f if line.strip()]
+        else:
+            self.lyrics_lines = input_text_path.split("\n")
+    if subtitle_type == 'srt':
+        return _generate_srt(self.word_timestamps,  self.lyrics_lines, output_st_path)
+    elif subtitle_type == 'webvtt':
+        return _generate_webvtt(self.word_timestamps,  self.lyrics_lines, output_st_path)
+
+
+def _generate_srt(word_timestamps,  lyrics_lines, output_srt_path, lyrics_lines_raw=None):
     # Generate line-level timestamps by mapping words to lines
     line_timestamps = []
     current_line = ""
@@ -558,13 +584,12 @@ def _generate_srt(model, tokenizer, input_audio_path, input_text_path, output_sr
                 {
                     "start": current_start,
                     "end": current_end,
-                    "text": lyrics_lines[line_index],
+                    "text": lyrics_lines[line_index] if lyrics_lines_raw is None else lyrics_lines_raw[line_index],
                 }
             )
             current_line = ""
             current_start = None
             line_index += 1
-
     # Save the SRT file
     with open(output_srt_path, "w") as f:
         for i, entry in enumerate(line_timestamps, start=1):
@@ -572,40 +597,17 @@ def _generate_srt(model, tokenizer, input_audio_path, input_text_path, output_sr
             end = entry["end"]
             text = entry["text"]
             f.write(f"{i}\n")
-            line = f"{int(start // 3600):02}:{int(start % 3600 // 60):02}:{start % 60:06.3f}".replace(".", ",") + " --> "\
-                   + f"{int(end // 3600):02}:{int(end % 3600 // 60):02}:{end % 60:06.3f}".replace(".", ",") + "\n"
+            x = f"{int(start // 3600):02}:{int(start % 3600 // 60):02}:{start % 60:06.3f}".replace(".", ",")
+            y = f"{int(end // 3600):02}:{int(end % 3600 // 60):02}:{end % 60:06.3f}".replace(".", ",")
+            line = x + " --> " + y + "\n"
             f.write(line)
+            text = text[0].upper() + text[1:]
             f.write(f"{text}\n\n")
     logger.debug(f"SRT file saved to {output_srt_path}")
     return os.path.exists(output_srt_path)
 
 
-def _generate_webvtt(model, tokenizer, input_audio_path, input_text_path, output_vtt_path, language="eng", batch_size=4):
-    # Load the audio waveform
-    audio_waveform = load_audio(input_audio_path)
-    # Read text from file or use input text directly
-    if os.path.isfile(input_text_path):
-        with open(input_text_path, "r", encoding="utf-8") as f:
-            text = f.read().strip().replace("\n", " ")
-    else:
-        text = input_text_path.strip().replace("\n", " ")
-    # Generate emissions using ONNX model
-    emissions, stride = generate_emissions(model, audio_waveform, batch_size=batch_size)
-    # Preprocess text for alignment
-    tokens_starred, text_starred = preprocess_text(text, romanize=True, language=language)
-    # Get alignments
-    segments, scores, blank_token = get_alignments(emissions, tokens_starred, tokenizer)
-    # Map segments to spans
-    spans = get_spans(tokens_starred, segments, blank_token)
-    # Get word-level timestamps
-    word_timestamps = postprocess_results(text_starred, spans, stride, scores)
-    # Read lyrics from file if applicable
-    lyrics_lines = []
-    if os.path.isfile(input_text_path):
-        with open(input_text_path, "r", encoding="utf-8") as f:
-            lyrics_lines = [line.strip() for line in f if line.strip()]
-    else:
-        lyrics_lines = input_text_path.split("\n")
+def _generate_webvtt(word_timestamps, lyrics_lines, output_vtt_path, lyrics_lines_raw=None):
     # Generate line-level timestamps
     line_timestamps = []
     current_line = ""
@@ -618,11 +620,10 @@ def _generate_webvtt(model, tokenizer, input_audio_path, input_text_path, output
         current_line += word["text"] + " "
         # If the current line matches a lyrics line, store timestamp
         if line_index < len(lyrics_lines) and lyrics_lines[line_index] == current_line.strip():
-            line_timestamps.append({
-                "start": current_start,
-                "end": current_end,
-                "text": lyrics_lines[line_index],
-            })
+            line_timestamps.append({"start": current_start, "end": current_end,
+                                    "text": lyrics_lines[line_index] if lyrics_lines_raw is None else lyrics_lines_raw[
+                                        line_index],
+                                    })
             current_line = ""
             current_start = None
             line_index += 1
@@ -635,10 +636,10 @@ def _generate_webvtt(model, tokenizer, input_audio_path, input_text_path, output
             text = entry["text"]
             start_time = f"{int(start // 3600):02}:{int(start % 3600 // 60):02}:{start % 60:06.3f}"
             end_time = f"{int(end // 3600):02}:{int(end % 3600 // 60):02}:{end % 60:06.3f}"
+            text = text[0].upper() + text[1:]
             f.write(f"{start_time} --> {end_time}\n{text}\n\n")
     logger.debug(f"WebVTT file saved to {output_vtt_path}")
     return os.path.isfile(output_vtt_path)
-
 
 
 class AlignmentSingleton:
@@ -658,11 +659,14 @@ class AlignmentSingleton:
         return cls._instance is not None
 
     def _load_model(self):
-        """Loads the ONNX alignment model and tokenizer."""
         logger.debug(f"Loading ONNX alignment model from '{self.model_path}'...")
         ensure_onnx_model(self.model_path, MODEL_URL)
         self.model = onnxruntime.InferenceSession(self.model_path)  # Load ONNX model
         self.tokenizer = Tokenizer()
+        self.word_timestamps = None
+        self.lyrics_lines = None
+        self.input_audio_path = None
+        self.input_text_path = None
 
     @property
     def alignment_model(self):
@@ -673,20 +677,12 @@ class AlignmentSingleton:
         return self.tokenizer
 
     def generate_srt(self, input_audio_path, input_text_path, output_srt_path, language="eng", batch_size=4):
-        return _generate_srt(self.model, self.tokenizer, input_audio_path, input_text_path, output_srt_path, language,
-                             batch_size)
+        return _generate_subtitle(self, input_audio_path, input_text_path, output_srt_path, language, batch_size,
+                                  subtitle_type='srt')
 
     def generate_webvtt(self, input_audio_path, input_text_path, output_vtt_path, language="eng", batch_size=4):
-        return _generate_webvtt(self.model, self.tokenizer, input_audio_path, input_text_path, output_vtt_path, language,
-                             batch_size)
-
-    def release_resources(self):
-        """Release resources by deleting the ONNX session."""
-        if self._instance:
-            del self.model  # Delete model to free memory
-            del self.tokenizer
-            self._instance = None
-            logger.debug("Model resources are released successfully")
+        return _generate_subtitle(self, input_audio_path, input_text_path, output_vtt_path, language, batch_size,
+                                  subtitle_type='webvtt')
 
 
 class Alignment:
@@ -703,9 +699,87 @@ class Alignment:
         return self.tokenizer
 
     def generate_srt(self, input_audio_path, input_text_path, output_srt_path, language="eng", batch_size=4):
-        return _generate_srt(self.model, self.tokenizer, input_audio_path, input_text_path, output_srt_path, language,
-                             batch_size)
+        return _generate_subtitle(self.model, self.tokenizer, input_audio_path, input_text_path, output_srt_path,
+                                  language, batch_size)
 
     def generate_webvtt(self, input_audio_path, input_text_path, output_vtt_path, language="eng", batch_size=4):
-        return _generate_webvtt(self.model, self.tokenizer, input_audio_path, input_text_path, output_vtt_path, language,
-                             batch_size)
+        return _generate_webvtt(self.model, self.tokenizer, input_audio_path, input_text_path, output_vtt_path,
+                                language, batch_size)
+
+
+class AlignmentTorchSingleton:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(AlignmentTorchSingleton, cls).__new__(cls)
+            cls._instance._initialize()
+        return cls._instance
+
+    def _initialize(self):
+        self.input_audio_path = None
+        self.input_text_path = None
+        self.model_type = None
+        self.word_timestamps = None
+        self.lyrics_lines = None
+        self.lyrics_lines_raw = None
+        self.model = None
+
+    @classmethod
+    def is_loaded(cls):
+        return cls._instance is not None
+
+    def _process_input(self, input_audio_path, input_text_path, model_type):
+        if (self.input_audio_path != input_audio_path or
+                self.input_text_path != input_text_path or
+                self.model_type != model_type):
+            self.input_audio_path = input_audio_path
+            self.input_text_path = input_text_path
+            self.model_type = model_type
+            self.word_timestamps, self.model, self.lyrics_lines = get_word_stamps(
+                input_audio_path, input_text_path, self.model, model_type
+            )
+
+            with open(input_text_path, "r") as f:
+                self.lyrics_lines_raw = [line.strip() for line in f if line.strip()]
+
+    def generate_srt(self, input_audio_path, input_text_path, output_srt_path, model_type='MMS_FA'):
+        self._process_input(input_audio_path, input_text_path, model_type)
+        return _generate_srt(self.word_timestamps, self.lyrics_lines, output_srt_path, self.lyrics_lines_raw)
+
+    def generate_webvtt(self, input_audio_path, input_text_path, output_vtt_path, model_type='MMS_FA'):
+        self._process_input(input_audio_path, input_text_path, model_type)
+        return _generate_webvtt(self.word_timestamps, self.lyrics_lines, output_vtt_path, self.lyrics_lines_raw)
+
+
+class AlignmentTorch:
+    def __init__(self):
+        self.input_audio_path = None
+        self.input_text_path = None
+        self.model_type = None
+        self.word_timestamps = None
+        self.lyrics_lines = None
+        self.lyrics_lines_raw = None
+        self.model = None
+
+    def _process_input(self, input_audio_path, input_text_path, model_type):
+        if (self.input_audio_path != input_audio_path or
+                self.input_text_path != input_text_path or
+                self.model_type != model_type):
+            self.input_audio_path = input_audio_path
+            self.input_text_path = input_text_path
+            self.model_type = model_type
+            self.word_timestamps, self.model, self.lyrics_lines = get_word_stamps(
+                input_audio_path, input_text_path, self.model, model_type
+            )
+
+            with open(input_text_path, "r") as f:
+                self.lyrics_lines_raw = [line.strip() for line in f if line.strip()]
+
+    def generate_srt(self, input_audio_path, input_text_path, output_srt_path, model_type='MMS_FA'):
+        self._process_input(input_audio_path, input_text_path, model_type)
+        return _generate_srt(self.word_timestamps, self.lyrics_lines, output_srt_path, self.lyrics_lines_raw)
+
+    def generate_webvtt(self, input_audio_path, input_text_path, output_vtt_path, model_type='MMS_FA'):
+        self._process_input(input_audio_path, input_text_path, model_type)
+        return _generate_webvtt(self.word_timestamps, self.lyrics_lines, output_vtt_path, self.lyrics_lines_raw)

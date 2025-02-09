@@ -1,33 +1,46 @@
 from setuptools import setup, find_packages, Extension
+import os
+
+with open("README.md", "r", encoding="utf-8") as fh:
+    long_description = fh.read()
 
 # Define the extension module
 ext_modules = [
     Extension(
-        "ctc_forced_aligner.align_ops",  # Use a submodule for clarity
-        ["ctc_forced_aligner/main.cpp"],  # Ensure correct path
-        extra_compile_args=["-std=c++17"],  # Use C++17 standard
+        "ctc_forced_aligner.align_ops",
+        ["ctc_forced_aligner/main.cpp"],
+        extra_compile_args=["-std=c++17"],
         language="c++",
     ),
 ]
 
-# Setup configuration
+
 setup(
     name="ctc_forced_aligner",
-    version="1.0.1",
+    version="1.0.2.dev0",
     author="Deskpai",
     author_email="dev@deskpai.com",
     description="CTC Forced Alignment",
-    packages=find_packages(),  # Include all Python packages
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    url="https://github.com/deskpai/ctc_forced_aligner",
+    packages=find_packages(),
     ext_modules=ext_modules,
     zip_safe=False,
     install_requires=[
-        "requests>=2.32.3",
+        "requests",
         "librosa>=0.10.2.post1",
-        "numpy==1.26.3",
-        "onnxruntime>=1.20.1"
+        "numpy",
+        "onnxruntime"
     ],
     package_data={
-        "ctc_forced_aligner": ["punctuations.lst"],  # Include punctuations.lst in package
+        "ctc_forced_aligner": ["punctuations.lst"],
+        "README.md": ["README.md"],
+        "LICENSE": ["LICENSE"],
     },
-    include_package_data=True,  # Ensure package data is included
+    extras_require={
+        "gpu": ["onnxruntime-gpu"],
+        "torch": ["torch", "torchaudio"],
+    },
+    include_package_data=True,
 )
