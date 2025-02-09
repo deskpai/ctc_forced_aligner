@@ -2,7 +2,7 @@
 
 We are open-sourcing the CTC forced aligner used in [Deskpai](https://www.deskpai.com).
 
-With focuses on production-ready model inference, it supports 18 different alignment models, including multilingual models(German, English, Spanish, French and Italian etc), and provides SRT and WebVTT alignment and generation out of box. It supports both ONNXRuntime and PyTorch for model serving.
+With focus on production-ready model inference, it supports 18 different alignment models, including multilingual models(German, English, Spanish, French and Italian etc), and provides SRT and WebVTT alignment and generation out of box. It supports both ONNXRuntime and PyTorch for model serving.
 
 ## 🚀 Installation  
 
@@ -94,7 +94,7 @@ These are fine-tuned models with a **CTC-based ASR head**:
 - `WAV2VEC2_ASR_LARGE_LV60K_100H`
 - `WAV2VEC2_ASR_LARGE_LV60K_960H`
 
-### ✅ VoxPopuli ASR Models (Multilingual)
+### ✅ VoxPopuli Models (Multilingual)
 
 These models are fine-tuned for **specific languages**:
 - `VOXPOPULI_ASR_BASE_10K_DE` (German ASR)
@@ -105,14 +105,10 @@ These models are fine-tuned for **specific languages**:
 
 - Fine-tuned on **VoxPopuli** speech corpus.
 
-### ✅ HuBERT ASR Models
+### ✅ HuBERT Models
 - `HUBERT_ASR_LARGE`
 - `HUBERT_ASR_XLARGE`
 
-✅ Characteristics:
-- Based on **HuBERT** (Hidden-Unit BERT), which learns speech representations differently from Wav2Vec2.
-- Has an ASR head and works similarly to Wav2Vec2 ASR models.
-- `XLARGE` is a bigger model with more parameters for better accuracy.
 
 ## 💡 Which One and How to Use?
 
