@@ -17,8 +17,8 @@ ext_modules = [
 
 setup(
     name="ctc_forced_aligner",
-    version="1.0.2.dev0",
-    author="Deskpai",
+    version="1.0.2.dev2",
+    author="Deskpai.com",
     author_email="dev@deskpai.com",
     description="CTC Forced Alignment",
     long_description=long_description,
@@ -41,6 +41,7 @@ setup(
     extras_require={
         "gpu": ["onnxruntime-gpu"],
         "torch": ["torch", "torchaudio"],
+        "all": ["torch", "torchaudio", "onnxruntime-gpu"],
     },
     include_package_data=True,
 )

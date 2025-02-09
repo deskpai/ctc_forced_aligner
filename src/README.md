@@ -2,7 +2,7 @@
 
 We are open-sourcing the CTC forced aligner used in [Deskpai](https://www.deskpai.com).
 
-It supports 18 different alignment models, including multilingual models(German, English, Spanish, French and Italian), and provides SRT and WebVTT alignment and generation out of box. It supports ONNXRuntime and PyTorch for model serving.
+With focuses on production-ready model inference, it supports 18 different alignment models, including multilingual models(German, English, Spanish, French and Italian etc), and provides SRT and WebVTT alignment and generation out of box. It supports both ONNXRuntime and PyTorch for model serving.
 
 ## 🚀 Installation  
 
@@ -24,7 +24,13 @@ pip install ctc_forced_aligner[gpu]
 pip install ctc_forced_aligner[torch]
 ```
 
-## 📝 Sample Code  
+- Install all dependencies
+
+```bash
+pip install ctc_forced_aligner[all]
+```
+
+## 📝 Sample Inference Code  
 
 - CPU/GPU inference via ONNXRuntime
 
@@ -141,7 +147,6 @@ Please contact [us](mailto:dev@deskpai.com) if you want to integrate your model 
   - `WAV2VEC2_ASR_LARGE_LV60K_10M`
   - `WAV2VEC2_ASR_LARGE_LV60K_100H`
   - `WAV2VEC2_ASR_LARGE_LV60K_960H`
-
 - VoxPopuli and HuBERT models are also developed by Meta AI and are generally released under the MIT License. The specific licensing for these models can be found in their respective repositories or documentation. Please check it on your own.
   - `VOXPOPULI_ASR_BASE_10K_DE`
   - `VOXPOPULI_ASR_BASE_10K_EN`

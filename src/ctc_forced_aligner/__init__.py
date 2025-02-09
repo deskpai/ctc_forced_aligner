@@ -22,7 +22,7 @@ MODEL_URL = 'https://huggingface.co/deskpai/ctc_forced_aligner/resolve/main/04ac
 logger = logging.getLogger(os.path.splitext(os.path.basename(__file__))[0])
 logger.debug(__file__)
 
-__all__ = ['Alignment', 'AlignmentSingleton']
+__all__ = ['Alignment', 'AlignmentSingleton', 'AlignmentTorch', 'AlignmentTorchSingleton']
 
 
 class Tokenizer:
