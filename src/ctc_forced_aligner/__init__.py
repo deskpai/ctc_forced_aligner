@@ -13,7 +13,7 @@ import requests
 
 from .norm_config import norm_config
 
-SAMPLING_FREQ = 16000  # Define the expected sampling frequency
+SAMPLING_FREQ = 16000
 VOCAB_DICT = {'<blank>': 0, '<pad>': 1, '</s>': 2, '<unk>': 3, 'a': 4, 'i': 5, 'e': 6, 'n': 7, 'o': 8, 'u': 9, 't': 10,
               's': 11, 'r': 12, 'm': 13, 'k': 14, 'l': 15, 'd': 16, 'g': 17, 'h': 18, 'y': 19, 'b': 20, 'p': 21,
               'w': 22, 'c': 23, 'v': 24, 'j': 25, 'z': 26, 'f': 27, "'": 28, 'q': 29, 'x': 30}
@@ -154,12 +154,14 @@ def load_transcript(file_path, dictionary):
     transcript = []
     for line in lines:
         words = line.strip().lower().split()
-        cleaned_words = ["".join([char for char in word if char in dictionary and dictionary[char] != 0]) for word in words]
+        cleaned_words = ["".join([char for char in word if char in dictionary and dictionary[char] != 0]) for word in
+                         words]
         cleaned_words = [word for word in cleaned_words if word]
         if cleaned_words:
             transcript.extend(cleaned_words)
             lyrics_lines.append(" ".join(cleaned_words))
     return transcript, lyrics_lines
+
 
 def align(emission, tokens, device):
     import torch
@@ -167,12 +169,14 @@ def align(emission, tokens, device):
     targets = torch.tensor([tokens], dtype=torch.int32, device=device)
     return F.forced_align(emission, targets, blank=0)
 
+
 def unflatten(list_, lengths):
     i, ret = 0, []
     for l in lengths:
-        ret.append(list_[i : i + l])
+        ret.append(list_[i: i + l])
         i += l
     return ret
+
 
 def _postprocess_results(text, spans, waveform, num_frames, sample_rate, scores):
     """Post-processes alignment results to return accurate word timestamps."""
@@ -187,6 +191,7 @@ def _postprocess_results(text, spans, waveform, num_frames, sample_rate, scores)
         results.append({"start": audio_start_sec, "end": audio_end_sec, "text": t, "score": score.item()})
     return results
 
+
 def get_word_stamps(audio_path, transcript_path, model=None, model_type='MMS_FA'):
     import torch
     import torchaudio
@@ -200,7 +205,8 @@ def get_word_stamps(audio_path, transcript_path, model=None, model_type='MMS_FA'
         model = model or bundle.get_model(with_star=False).to(device)
     elif model_type in ('WAV2VEC2_ASR_BASE_960H', 'WAV2VEC2_ASR_BASE_100H', 'WAV2VEC2_ASR_BASE_10M',
                         'WAV2VEC2_ASR_LARGE_10M', 'WAV2VEC2_ASR_LARGE_100H', 'WAV2VEC2_ASR_LARGE_960H',
-                        'WAV2VEC2_ASR_LARGE_LV60K_10M', 'WAV2VEC2_ASR_LARGE_LV60K_100H', 'WAV2VEC2_ASR_LARGE_LV60K_960H',
+                        'WAV2VEC2_ASR_LARGE_LV60K_10M', 'WAV2VEC2_ASR_LARGE_LV60K_100H',
+                        'WAV2VEC2_ASR_LARGE_LV60K_960H',
                         'VOXPOPULI_ASR_BASE_10K_DE', 'VOXPOPULI_ASR_BASE_10K_EN', 'VOXPOPULI_ASR_BASE_10K_ES',
                         'VOXPOPULI_ASR_BASE_10K_FR', 'VOXPOPULI_ASR_BASE_10K_IT', 'HUBERT_ASR_LARGE',
                         'HUBERT_ASR_XLARGE'):
@@ -213,12 +219,15 @@ def get_word_stamps(audio_path, transcript_path, model=None, model_type='MMS_FA'
         raise Exception(f"wrong model type: {model_type}")
     with torch.inference_mode():
         emission, _ = model(waveform)
-    tokenized_transcript = [dictionary[c] for word in transcript for c in word if c in dictionary and dictionary[c] != 0]
+    tokenized_transcript = [dictionary[c] for word in transcript for c in word if
+                            c in dictionary and dictionary[c] != 0]
     aligned_tokens, alignment_scores = align(emission, tokenized_transcript, device)
     token_spans = F.merge_tokens(aligned_tokens[0], alignment_scores[0])
     word_spans = unflatten(token_spans, [len(word) for word in transcript])
-    word_timestamps = _postprocess_results(transcript, word_spans, waveform, emission.size(1), bundle.sample_rate, alignment_scores)
+    word_timestamps = _postprocess_results(transcript, word_spans, waveform, emission.size(1), bundle.sample_rate,
+                                           alignment_scores)
     return word_timestamps, model, lyrics_lines
+
 
 def generate_emissions(session, audio_waveform, window_length=30, context_length=2, batch_size=4):
     # Ensure input is 1D
@@ -561,12 +570,12 @@ def _generate_subtitle(self, input_audio_path, input_text_path, output_st_path, 
         else:
             self.lyrics_lines = input_text_path.split("\n")
     if subtitle_type == 'srt':
-        return _generate_srt(self.word_timestamps,  self.lyrics_lines, output_st_path)
+        return _generate_srt(self.word_timestamps, self.lyrics_lines, output_st_path)
     elif subtitle_type == 'webvtt':
-        return _generate_webvtt(self.word_timestamps,  self.lyrics_lines, output_st_path)
+        return _generate_webvtt(self.word_timestamps, self.lyrics_lines, output_st_path)
 
 
-def _generate_srt(word_timestamps,  lyrics_lines, output_srt_path, lyrics_lines_raw=None):
+def _generate_srt(word_timestamps, lyrics_lines, output_srt_path, lyrics_lines_raw=None):
     # Generate line-level timestamps by mapping words to lines
     line_timestamps = []
     current_line = ""
@@ -608,7 +617,6 @@ def _generate_srt(word_timestamps,  lyrics_lines, output_srt_path, lyrics_lines_
 
 
 def _generate_webvtt(word_timestamps, lyrics_lines, output_vtt_path, lyrics_lines_raw=None):
-    # Generate line-level timestamps
     line_timestamps = []
     current_line = ""
     current_start = None
@@ -627,7 +635,6 @@ def _generate_webvtt(word_timestamps, lyrics_lines, output_vtt_path, lyrics_line
             current_line = ""
             current_start = None
             line_index += 1
-    # Save WebVTT file
     with open(output_vtt_path, "w", encoding="utf-8") as f:
         f.write("WEBVTT\n\n")
         for entry in line_timestamps:
