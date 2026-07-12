@@ -229,6 +229,13 @@ def get_word_stamps(audio_path, transcript_path, model=None, model_type='MMS_FA'
     return word_timestamps, model, lyrics_lines
 
 
+def _log_softmax_in_place(values):
+    """Apply a numerically stable log-softmax over the final axis."""
+    values -= numpy.max(values, axis=-1, keepdims=True)
+    values -= numpy.log(numpy.sum(numpy.exp(values), axis=-1, keepdims=True))
+    return values
+
+
 def generate_emissions(session, audio_waveform, window_length=30, context_length=2, batch_size=4):
     # Ensure input is 1D
     assert audio_waveform.ndim == 1, "audio_waveform must be a 1D array"
@@ -264,10 +271,12 @@ def generate_emissions(session, audio_waveform, window_length=30, context_length
     if time_to_frame(extension / SAMPLING_FREQ) > 0:
         emissions = emissions[: -time_to_frame(extension / SAMPLING_FREQ), :]
     # Apply log softmax (matching PyTorch post-processing)
-    emissions = numpy.log(numpy.exp(emissions) / numpy.sum(numpy.exp(emissions), axis=-1, keepdims=True))
+    emissions = emissions.astype(numpy.float32, copy=False)
+    emissions = _log_softmax_in_place(emissions)
     # Add extra dimension for <star> token (same as PyTorch)
-    emissions = numpy.concatenate([emissions, numpy.zeros((emissions.shape[0], 1))], axis=1)
-    emissions = emissions.astype(numpy.float32)  # Ensure float32
+    emissions = numpy.concatenate(
+        [emissions, numpy.zeros((emissions.shape[0], 1), dtype=emissions.dtype)], axis=1
+    )
     logger.debug(f"ONNX Raw Emissions dtype: {emissions.dtype}")  # Should be float32
     # Compute stride
     stride = float(audio_waveform.shape[0] * 1000 / emissions.shape[0] / SAMPLING_FREQ)
